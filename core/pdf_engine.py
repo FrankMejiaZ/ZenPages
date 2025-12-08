@@ -31,3 +31,23 @@ class PDFEngine:
         if self.doc:
             return len(self.doc)
         return 0
+    
+    def save_cover(self, pdf_path, save_path, width=200):
+        """
+        Abre el PDF, toma la primera página y la guarda como imagen PNG.
+        Retorna True si tuvo éxito.
+        """
+        try:
+            doc = fitz.open(pdf_path)
+            page = doc.load_page(0) # Primera página
+            
+            zoom = width / 600
+            mat = fitz.Matrix(zoom, zoom)
+            
+            pix = page.get_pixmap(matrix=mat)
+            pix.save(save_path) # Guardar en disco
+            doc.close()
+            return True
+        except Exception as e:
+            print(f"No se pudo generar portada para {pdf_path}: {e}")
+            return False
