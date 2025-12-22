@@ -55,3 +55,18 @@ class DBManager:
         if row:
             return row[0]
         return 0
+
+    def get_book_full_info(self, file_path):
+        """
+        Devuelve una tupla (current_page, total_pages).
+        Si el libro no existe, devuelve (0, 0).
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT current_page, total_pages FROM books WHERE file_path = ?', (file_path,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            return (row[0], row[1])
+        return (0, 0)

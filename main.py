@@ -1,6 +1,6 @@
 import sys
 import os
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QScrollArea, QHBoxLayout, QPushButton, QStackedWidget, QGridLayout, QFrame, QToolButton)
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QScrollArea, QHBoxLayout, QPushButton, QStackedWidget, QGridLayout, QFrame, QToolButton, QProgressBar)
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon, QPixmap
 
@@ -17,7 +17,7 @@ class LibraryView(QWidget):
         self.scanner = LibraryScanner()
         self.layout = QVBoxLayout(self)
         
-        title = QLabel("Mi Biblioteca Zen")
+        title = QLabel("Mi Biblioteca")
         title.setStyleSheet("font-size: 24px; font-weight: bold; margin: 10px;")
         self.layout.addWidget(title)
 
@@ -32,10 +32,9 @@ class LibraryView(QWidget):
         self.refresh_library()
 
     def refresh_library(self):
-        """Escanea la carpeta, genera portadas y crea la grilla visual."""
         books = self.scanner.scan_books()
         
-        # Limpiar grid anterior
+        # Limpiar grid
         for i in reversed(range(self.grid.count())): 
             self.grid.itemAt(i).widget().setParent(None)
 
@@ -43,62 +42,92 @@ class LibraryView(QWidget):
         col = 0
         max_cols = 3 
         
-        # Ruta donde guardamos las portadas
         covers_dir = os.path.join("assets", "covers")
         if not os.path.exists(covers_dir):
             os.makedirs(covers_dir)
             
-        # Motor temporal solo para generar portadas sin afectar al lector principal
         thumb_engine = PDFEngine() 
+        
+        # Instancia de DB para consultar progreso
+        db = DBManager()
 
         for book_path in books:
             book_name = os.path.basename(book_path)
             
-            # Definir ruta de la imagen de portada (nombre_del_pdf.png)
+            # --- 1. PREPARAR DATOS ---
+            # Obtener progreso (Pagina Actual / Total)
+            current, total = db.get_book_full_info(book_path)
+            progress_pct = 0
+            if total > 0:
+                progress_pct = int((current / total) * 100)
+
+            # --- 2. GENERAR PORTADA (Igual que antes) ---
             cover_filename = book_name + ".png"
             cover_path = os.path.join(covers_dir, cover_filename)
             
-            # 1. Si la portada no existe, la creamos
             if not os.path.exists(cover_path):
-                # Generamos la imagen
                 thumb_engine.save_cover(book_path, cover_path)
             
-            # 2. Configurar el botón visual (QToolButton es mejor para Icono + Texto)
+            # --- 3. CREAR EL CONTENEDOR (La "Card") ---
+            # Usamos un QWidget para agrupar Botón + Barra
+            card_container = QWidget()
+            card_layout = QVBoxLayout(card_container)
+            card_layout.setContentsMargins(0, 0, 0, 0) # Quitar márgenes extra
+            card_layout.setSpacing(2) # Poco espacio entre foto y barra
+
+            # A. El Botón (Portada)
             btn = QToolButton()
             btn.setText(book_name)
-            
-            # Cargar el icono desde el archivo generado
             if os.path.exists(cover_path):
                 btn.setIcon(QIcon(cover_path))
-            else:
-                # Si falló, quizás un icono genérico o nada
-                pass
-                
-            # Configuración visual del botón
-            btn.setIconSize(QSize(140, 200)) # Tamaño de la imagen
-            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon) # Texto abajo
-            btn.setFixedSize(160, 240) # Tamaño total del botón
             
-            # Estilo CSS para que se vea elegante y el texto sea negro
+            btn.setIconSize(QSize(140, 200))
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+            btn.setFixedSize(160, 240)
+            
+            # Estilo del botón (recortamos el texto largo si es necesario)
             btn.setStyleSheet("""
                 QToolButton {
                     background-color: #ffffff;
-                    color: #333333;
+                    color: #333;
                     border: 1px solid #ddd;
                     border-radius: 8px;
                     padding: 5px;
                     font-size: 11px;
                 }
                 QToolButton:hover {
-                    background-color: #e6f7ff;
                     border: 1px solid #1890ff;
+                    background-color: #f0f5ff;
                 }
             """)
-            
-            # Conectar clic
             btn.clicked.connect(lambda ch, path=book_path: self.main.open_book(path))
             
-            self.grid.addWidget(btn, row, col)
+            # B. La Barra de Progreso
+            pbar = QProgressBar()
+            pbar.setFixedHeight(10) # Finita
+            pbar.setValue(progress_pct)
+            pbar.setTextVisible(False) # No mostrar el número dentro de la barra
+            
+            # Estilo de la barra (Verde si terminó, Azul si leyendo, Gris si 0)
+            color = "#4CAF50" if progress_pct == 100 else "#2196F3"
+            pbar.setStyleSheet(f"""
+                QProgressBar {{
+                    border: 1px solid #bbb;
+                    border-radius: 5px;
+                    background-color: #e0e0e0;
+                }}
+                QProgressBar::chunk {{
+                    background-color: {color};
+                    border-radius: 5px;
+                }}
+            """)
+
+            # Agregar elementos al layout de la tarjeta
+            card_layout.addWidget(btn)
+            card_layout.addWidget(pbar)
+            
+            # Agregar la tarjeta completa al Grid principal
+            self.grid.addWidget(card_container, row, col)
             
             col += 1
             if col >= max_cols:
