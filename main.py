@@ -1,6 +1,6 @@
 import sys
 import os
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QScrollArea, QHBoxLayout, QPushButton, QStackedWidget, QGridLayout, QFrame, QToolButton, QProgressBar)
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QScrollArea, QHBoxLayout, QPushButton, QStackedWidget, QGridLayout, QFrame, QToolButton, QProgressBar, QTabBar)
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon, QPixmap
 
@@ -13,128 +13,182 @@ from core.library_scanner import LibraryScanner
 class LibraryView(QWidget):
     def __init__(self, main_window_ref):
         super().__init__()
-        self.main = main_window_ref # Referencia para poder cambiar de pantalla
+        self.main = main_window_ref 
         self.scanner = LibraryScanner()
         self.layout = QVBoxLayout(self)
         
+        # Header
         title = QLabel("Mi Biblioteca")
         title.setStyleSheet("font-size: 24px; font-weight: bold; margin: 10px;")
         self.layout.addWidget(title)
 
-        # Área de Scroll para los libros
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        # Tabs para filtros (Usamos QTabBar directamente para no tener el "cuerpo" vacío del QTabWidget)
+        self.tabs = QTabBar()
+        self.tabs.addTab("Todos")
+        self.tabs.addTab("Leyendo")
+        self.tabs.addTab("Terminados")
+        self.tabs.setShape(QTabBar.Shape.RoundedNorth)
+        self.tabs.setDrawBase(False) # Quitar la línea base para que se vea más limpio
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+        
+        # Contenedor para los tabs para darles un poco de estilo/margen si es necesario
+        tabs_container = QWidget()
+        tabs_layout = QHBoxLayout(tabs_container)
+        tabs_layout.setContentsMargins(10, 0, 10, 0)
+        tabs_layout.addWidget(self.tabs)
+        tabs_layout.addStretch() # Alinear a la izquierda
+        
+        self.layout.addWidget(tabs_container)
+
+
+        # Área de Scroll (Compartida para todos los libros, se repuebla según el tab)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet("border: none;") # Quitar borde para limpieza
         self.content_widget = QWidget()
         self.grid = QGridLayout(self.content_widget)
-        scroll.setWidget(self.content_widget)
-        self.layout.addWidget(scroll)
+        self.grid.setSpacing(15)
+        self.scroll.setWidget(self.content_widget)
+        
+        # Añadimos el scroll al layout principal (debajo de los tabs)
+        self.layout.addWidget(self.scroll)
 
+        # Cache de libros para no re-escanear constantmente
+        self.cached_books = []
+        self.load_books_data()
+        self.refresh_library() # Pinta el tab actual (Todos)
+
+    def on_tab_changed(self, index):
         self.refresh_library()
 
-    def refresh_library(self):
-        books = self.scanner.scan_books()
+    def load_books_data(self):
+        """Escanea y prepara los datos básicos de libros (progreso, etc)"""
+        raw_books = self.scanner.scan_books()
+        self.cached_books = []
         
-        # Limpiar grid
-        for i in reversed(range(self.grid.count())): 
-            self.grid.itemAt(i).widget().setParent(None)
-
-        row = 0
-        col = 0
-        max_cols = 3 
-        
+        db = DBManager()
+        thumb_engine = PDFEngine()
         covers_dir = os.path.join("assets", "covers")
         if not os.path.exists(covers_dir):
             os.makedirs(covers_dir)
-            
-        thumb_engine = PDFEngine() 
-        
-        # Instancia de DB para consultar progreso
-        db = DBManager()
 
-        for book_path in books:
+        for book_path in raw_books:
             book_name = os.path.basename(book_path)
             
-            # --- 1. PREPARAR DATOS ---
-            # Obtener progreso (Pagina Actual / Total)
+            # Datos DB
             current, total = db.get_book_full_info(book_path)
             progress_pct = 0
             if total > 0:
                 progress_pct = int((current / total) * 100)
-
-            # --- 2. GENERAR PORTADA (Igual que antes) ---
+            
+            # Portada
             cover_filename = book_name + ".png"
             cover_path = os.path.join(covers_dir, cover_filename)
-            
             if not os.path.exists(cover_path):
                 thumb_engine.save_cover(book_path, cover_path)
             
-            # --- 3. CREAR EL CONTENEDOR (La "Card") ---
-            # Usamos un QWidget para agrupar Botón + Barra
-            card_container = QWidget()
-            card_layout = QVBoxLayout(card_container)
-            card_layout.setContentsMargins(0, 0, 0, 0) # Quitar márgenes extra
-            card_layout.setSpacing(2) # Poco espacio entre foto y barra
+            self.cached_books.append({
+                "path": book_path,
+                "name": book_name,
+                "cover": cover_path,
+                "progress": progress_pct
+            })
 
-            # A. El Botón (Portada)
-            btn = QToolButton()
-            btn.setText(book_name)
-            if os.path.exists(cover_path):
-                btn.setIcon(QIcon(cover_path))
-            
-            btn.setIconSize(QSize(140, 200))
-            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-            btn.setFixedSize(160, 240)
-            
-            # Estilo del botón (recortamos el texto largo si es necesario)
-            btn.setStyleSheet("""
-                QToolButton {
-                    background-color: #ffffff;
-                    color: #333;
-                    border: 1px solid #ddd;
-                    border-radius: 8px;
-                    padding: 5px;
-                    font-size: 11px;
-                }
-                QToolButton:hover {
-                    border: 1px solid #1890ff;
-                    background-color: #f0f5ff;
-                }
-            """)
-            btn.clicked.connect(lambda ch, path=book_path: self.main.open_book(path))
-            
-            # B. La Barra de Progreso
-            pbar = QProgressBar()
-            pbar.setFixedHeight(10) # Finita
-            pbar.setValue(progress_pct)
-            pbar.setTextVisible(False) # No mostrar el número dentro de la barra
-            
-            # Estilo de la barra (Verde si terminó, Azul si leyendo, Gris si 0)
-            color = "#4CAF50" if progress_pct == 100 else "#2196F3"
-            pbar.setStyleSheet(f"""
-                QProgressBar {{
-                    border: 1px solid #bbb;
-                    border-radius: 5px;
-                    background-color: #e0e0e0;
-                }}
-                QProgressBar::chunk {{
-                    background-color: {color};
-                    border-radius: 5px;
-                }}
-            """)
+    def refresh_library(self):
+        # 1. Limpiar Grid
+        for i in reversed(range(self.grid.count())): 
+            widget = self.grid.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
 
-            # Agregar elementos al layout de la tarjeta
-            card_layout.addWidget(btn)
-            card_layout.addWidget(pbar)
-            
-            # Agregar la tarjeta completa al Grid principal
-            self.grid.addWidget(card_container, row, col)
-            
+        # 2. Filtrar libros según Tab
+        current_tab_idx = self.tabs.currentIndex()
+        # 0: Todos, 1: Leyendo (0 < p < 100), 2: Terminados (p == 100)
+        
+        filtered_books = []
+        for book in self.cached_books:
+            p = book["progress"]
+            if current_tab_idx == 0: # Todos
+                filtered_books.append(book)
+            elif current_tab_idx == 1: # Leyendo
+                if 0 < p < 100:
+                    filtered_books.append(book)
+            elif current_tab_idx == 2: # Terminados
+                if p == 100:
+                    filtered_books.append(book)
+
+        # 3. Renderizar
+        row = 0
+        col = 0
+        max_cols = 4 # Un poco más ancho el grid
+
+        for book_data in filtered_books:
+            self.create_book_card(book_data, row, col)
             col += 1
             if col >= max_cols:
                 col = 0
                 row += 1
         
+        # Alineación para que no se expandan feo si hay pocos
         self.grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+
+    def create_book_card(self, data, row, col):
+        card_container = QWidget()
+        card_layout = QVBoxLayout(card_container)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(2)
+
+        # Botón
+        btn = QToolButton()
+        btn.setText(data["name"])
+        if os.path.exists(data["cover"]):
+            btn.setIcon(QIcon(data["cover"]))
+        
+        btn.setIconSize(QSize(130, 190))
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        btn.setFixedSize(150, 230)
+        
+        # Estilo mejorado
+        btn.setStyleSheet("""
+            QToolButton {
+                background-color: #ffffff;
+                color: #222; 
+                border: 1px solid #ccc;
+                border-radius: 8px;
+                padding: 4px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QToolButton:hover {
+                border: 2px solid #2196F3;
+                background-color: #e3f2fd;
+            }
+        """)
+        btn.clicked.connect(lambda ch, path=data["path"]: self.main.open_book(path))
+        
+        # Barra
+        pbar = QProgressBar()
+        pbar.setFixedHeight(8)
+        pbar.setValue(data["progress"])
+        pbar.setTextVisible(False)
+        
+        color = "#4CAF50" if data["progress"] == 100 else "#2196F3"
+        pbar.setStyleSheet(f"""
+            QProgressBar {{
+                border: none;
+                background-color: #e0e0e0;
+                border-radius: 4px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {color};
+                border-radius: 4px;
+            }}
+        """)
+
+        card_layout.addWidget(btn)
+        card_layout.addWidget(pbar)
+        
+        self.grid.addWidget(card_container, row, col)
 
 # VISTA 2: EL LECTOR (LO QUE YA SE TENÍA)
 class ReaderView(QWidget):
@@ -242,6 +296,9 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(1) # Cambia a vista lector
 
     def show_library(self):
+        # Actualizar datos antes de mostrar (para que los filtros y barras estén al día)
+        self.library_view.load_books_data()
+        self.library_view.refresh_library()
         self.stack.setCurrentIndex(0) # Vuelve a la vista biblioteca
 
 if __name__ == "__main__":
