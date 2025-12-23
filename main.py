@@ -1,6 +1,6 @@
 import sys
 import os
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QScrollArea, QHBoxLayout, QPushButton, QStackedWidget, QGridLayout, QFrame, QToolButton, QProgressBar, QTabBar)
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QScrollArea, QHBoxLayout, QPushButton, QStackedWidget, QGridLayout, QFrame, QToolButton, QProgressBar, QTabBar, QInputDialog)
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon, QPixmap
 
@@ -201,16 +201,35 @@ class ReaderView(QWidget):
         self.current_file = None
         self.current_page_num = 0
         self.total_pages = 0
+        self.current_zoom = 1.2 # Zoom inicial 120%
 
         # Layout principal
         layout = QVBoxLayout(self)
 
-        # Barra superior con botón "Volver"
+        # Barra superior con botón "Volver" y controles de Zoom
         top_bar = QHBoxLayout()
         btn_back = QPushButton("🔙 Volver a Biblioteca")
         btn_back.clicked.connect(self.go_back)
+        
+        # Controles de Zoom en la barra superior
+        self.btn_zoom_out = QPushButton("🔍-")
+        self.btn_zoom_out.setFixedWidth(40)
+        self.btn_zoom_out.clicked.connect(self.zoom_out)
+        
+        self.lbl_zoom = QLabel("120%")
+        self.lbl_zoom.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_zoom.setFixedWidth(50)
+        
+        self.btn_zoom_in = QPushButton("🔍+")
+        self.btn_zoom_in.setFixedWidth(40)
+        self.btn_zoom_in.clicked.connect(self.zoom_in)
+
         top_bar.addWidget(btn_back)
-        top_bar.addStretch()
+        top_bar.addStretch() # Espaciador
+        top_bar.addWidget(self.btn_zoom_out)
+        top_bar.addWidget(self.lbl_zoom)
+        top_bar.addWidget(self.btn_zoom_in)
+        
         layout.addLayout(top_bar)
 
         # Área de lectura
@@ -225,14 +244,62 @@ class ReaderView(QWidget):
         controls = QHBoxLayout()
         self.btn_prev = QPushButton("<< Anterior")
         self.btn_prev.clicked.connect(self.prev_page)
+        
         self.lbl_info = QLabel("0 / 0")
+        
         self.btn_next = QPushButton("Siguiente >>")
         self.btn_next.clicked.connect(self.next_page)
-        
+
+        # Botón Ir a Página
+        self.btn_goto = QPushButton("Ir a...")
+        self.btn_goto.clicked.connect(self.open_goto_dialog)
+
         controls.addWidget(self.btn_prev)
         controls.addWidget(self.lbl_info)
         controls.addWidget(self.btn_next)
+        controls.addWidget(self.btn_goto)
+        
         layout.addLayout(controls)
+
+        # Habilitar foco para capturar teclado
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    # --- Manejo de Zoom ---
+    def zoom_in(self):
+        self.current_zoom += 0.2
+        self.render_page()
+
+    def zoom_out(self):
+        if self.current_zoom > 0.4: # Mínimo 40%
+            self.current_zoom -= 0.2
+            self.render_page()
+
+    # --- Manejo de Teclado ---
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == Qt.Key.Key_Left or key == Qt.Key.Key_Up:
+            self.prev_page()
+        elif key == Qt.Key.Key_Right or key == Qt.Key.Key_Down or key == Qt.Key.Key_Space:
+            self.next_page()
+        else:
+            super().keyPressEvent(event)
+
+    def open_goto_dialog(self):
+        if self.total_pages <= 0:
+            return
+            
+        page, ok = QInputDialog.getInt(
+            self, 
+            "Ir a página", 
+            f"Número de página (1 - {self.total_pages}):", 
+            self.current_page_num + 1, 
+            1, 
+            self.total_pages
+        )
+        if ok:
+            self.current_page_num = page - 1
+            self.render_page()
+            self.setFocus() # Devolver el foco al lector para seguir usando teclado
 
     def load_file(self, path):
         self.current_file = path
@@ -245,10 +312,11 @@ class ReaderView(QWidget):
             self.image_label.setText("Error al abrir PDF")
 
     def render_page(self):
-        pixmap = self.engine.get_page_image(self.current_page_num, zoom=1.5)
+        pixmap = self.engine.get_page_image(self.current_page_num, zoom=self.current_zoom)
         if pixmap:
             self.image_label.setPixmap(pixmap)
             self.lbl_info.setText(f"Página: {self.current_page_num + 1} / {self.total_pages}")
+            self.lbl_zoom.setText(f"{int(self.current_zoom * 100)}%") # Actualizar etiqueta zoom
             self.db.update_book_progress(self.current_file, self.current_page_num, self.total_pages)
         
         self.btn_prev.setEnabled(self.current_page_num > 0)
@@ -294,6 +362,7 @@ class MainWindow(QMainWindow):
         print(f"Abriendo libro: {file_path}")
         self.reader_view.load_file(file_path) # Cargar el libro en la vista lector
         self.stack.setCurrentIndex(1) # Cambia a vista lector
+        self.reader_view.setFocus() # Dar foco para que el teclado funcione inmediatamente
 
     def show_library(self):
         # Actualizar datos antes de mostrar (para que los filtros y barras estén al día)
@@ -303,6 +372,12 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    
+    # Configurar fuente global para evitar advertencias de "Point size <= 0"
+    from PyQt6.QtGui import QFont
+    font = QFont("Segoe UI", 9)
+    app.setFont(font)
+    
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
